@@ -1,19 +1,19 @@
-#include <iostream>
-#include <array>
-#include <string>
-#include <vector>
-#include <fstream>
-#include <algorithm>
-#include <compare>
-#include <map>
-#include <unordered_map>
-#include <optional>
-#include <cassert>
-#include <memory>
-#include <stdexcept>
-#include <random>
-#include <execution>
 #include "guesser.h"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <compare>
+#include <execution>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 using std::cout;
 using std::cin;
@@ -136,6 +136,7 @@ std::unique_ptr<Node> construct(vector<String> words, const vector<String>& voca
         auto node = std::make_unique<Node>();
         node->count = 1;
         node->words = words;
+        node->depth = 1;
         if (progress_callback != nullptr) {
             progress_callback(*node);
         }
@@ -179,12 +180,14 @@ std::unique_ptr<Node> construct(vector<String> words, const vector<String>& voca
     auto min_split_result = split(words, min_split.second);
     auto node = std::make_unique<Node>();
     node->count = 0;
+    node->depth = 1;
     node->words = std::move(words);
     node->splitter = min_split.second;
 
     for (auto& [k, vec] : min_split_result) {
         auto sub_node = construct(std::move(vec), vocabulary, progress_callback);
         node->count += sub_node->count;
+        node->depth = std::max(node->depth, sub_node->depth + 1);
         node->children[k] = std::move(sub_node);
     }
 
@@ -203,16 +206,19 @@ void Guesser::init(const std::vector<String> &words) {
 
 void Guesser::build() {
     std::function<void(const Node &)> callback;
+    size_t count = 0;
     if (build_progress_callback) {
-        callback = [&]() {
-            volatile size_t count = 0;
-            return [&](const Node &node) mutable {
-                build_progress_callback(node, count, candidates.size());
-                count += 1;
-            };
-        }();
+        callback = [&](const Node &node) {
+            build_progress_callback(node, count++, candidates.size());
+        };
+    }
+    if (build_start_callback) {
+        build_start_callback();
     }
     node = construct(candidates, words, callback);
+    if (build_end_callback) {
+        build_end_callback(*node);
+    }
     cur = node.get();
 }
 
@@ -288,13 +294,13 @@ void Guesser::guess(const String &word, const CompareResult &result) {
     build();
 }
 
-std::pair<String, int> Guesser::current() const {
-    if (finished()) return {cur->words[0], 1};
-    return {cur->splitter.value(), cur->count};
+std::tuple<String, size_t, size_t> Guesser::current() const {
+    if (finished()) return { cur->words[0], 1, 1 };
+    return { cur->splitter.value(), cur->count, cur->depth };
 }
 
-std::vector<std::pair<String, CompareResult>> Guesser::current_list() const {
-    std::vector<std::pair<String, CompareResult>> result;
+std::vector<std::tuple<String, CompareResult, size_t, size_t>> Guesser::current_list() const {
+    std::vector<std::tuple<String, CompareResult, size_t, size_t>> result;
     if (finished()) {
         static constexpr CompareResult green = []() {
             CompareResult result;
@@ -303,10 +309,10 @@ std::vector<std::pair<String, CompareResult>> Guesser::current_list() const {
             }
             return result;
         }();
-        return {{cur->words[0], green}};
+        return { { cur->words[0], green, 1, 1 } };
     }
     for (auto& [k, v] : cur->children) {
-        result.push_back({cur->splitter.value(), k});
+        result.push_back({ cur->splitter.value(), k, v->count, v->depth });
     }
     return result;
 }

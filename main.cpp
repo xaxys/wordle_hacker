@@ -1,10 +1,13 @@
+#include "guesser.h"
+#include <chrono>
+#include <execution>
+#include <fmt/color.h>
+#include <fmt/format.h>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <fstream>
-#include <fmt/format.h>
-#include <fmt/color.h>
-#include "guesser.h"
 
 #define STR(x) #x
 const char* file_location = R"(limited_words.txt)";
@@ -24,16 +27,16 @@ std::vector<std::string> load(const char* file) {
 	vector<std::string> words;
 	std::string line;
 	while (std::getline(fin, line)) {
-		if (line.size() != 5) {
-			continue;
-		}
-		auto is_word = std::all_of(line.begin(), line.end(), [](char ch) {
+		std::stringstream ss(line);
+		std::string word;
+		ss >> word;
+		auto is_word = std::all_of(word.begin(), word.end(), [](char ch) {
 			return 'a' <= ch && ch <= 'z';
 		});
 		if (!is_word) {
 			continue;
 		}
-		words.emplace_back(line);
+		words.emplace_back(word);
 	}
 	cout << words.size() << " words loaded" << endl;
 	return words;
@@ -71,19 +74,35 @@ public:
 		print_with_color("$", node, "", 0, max_level);
 	}
 
-	void print_with_color(const std::vector<std::pair<String, CompareResult>>& candidates) {
+	void print_with_color(const std::vector<std::tuple<String, CompareResult, size_t, size_t>>& candidates) {
 		if (candidates.empty()) {
 			out << "no candidates found" << endl;
 			return;
 		}
-		for (auto& [word, result] : candidates) {
+		for (auto& [word, result, _, __] : candidates) {
 			String colored_output;
 			for (auto i = 0; i < 5; i++) {
 				auto status = result.get_status(i);
 				colored_output += wrap(word[i], status);
 			}
-			++count;
-			out << count << ": " << colored_output << endl;
+			count++;
+			out << fmt::format(FMT_STRING("{:3}: {}"), count, colored_output) << endl;
+		}
+	}
+
+	void print_with_color_verbose(const std::vector<std::tuple<String, CompareResult, size_t, size_t>>& candidates) {
+		if (candidates.empty()) {
+			out << "no candidates found" << endl;
+			return;
+		}
+		for (auto& [word, result, possibilities, depth] : candidates) {
+			String colored_output;
+			for (auto i = 0; i < 5; i++) {
+				auto status = result.get_status(i);
+				colored_output += wrap(word[i], status);
+			}
+			count++;
+			out << fmt::format(FMT_STRING("{:3}: {} (cnt: {}, dep: {})"), count, colored_output, possibilities, depth) << endl;
 		}
 	}
 
@@ -129,7 +148,7 @@ String get_string() {
 	char ch;
 	String input;
 	while (true) {
-		ch = getchar();
+		ch = (char)getchar();
 		if (!std::isprint(ch)) {
 			break;
 		}
@@ -140,30 +159,40 @@ String get_string() {
 
 int main(int argc, char** argv) {
     if (argc > 1) file_location = argv[1];
-	cout << "\033[1;31mloading data\033[0m" << endl;
+	cout << fmt::format(FMT_STRING("file location: {}"), file_location) << endl;
+	cout << fmt::format(fmt::fg(fmt::color::yellow), FMT_STRING("loading words..."), file_location) << endl;
 	auto words = load(file_location);
 	Guesser guesser;
+	auto start = std::chrono::high_resolution_clock::now();
+	auto start_callback = [&]() {
+		cout << fmt::format(fmt::fg(fmt::color::yellow), "constructing...") << endl;
+		start = std::chrono::high_resolution_clock::now();
+	};
+	auto end_callback = [&](const Node &node) {
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		cout << "\r" << fmt::format(FMT_STRING("constructed in {:.3f} s"), duration.count() / 1000.0) << endl;
+	};
     auto progress_callback = [&](const Node &node, size_t progress, size_t total) {
-		if (progress == 0) {
-        	cout << "\033[1;31mconstructing\033[0m" << endl;
-		}
-        if (progress % std::max((size_t)(total / 100), 1ULL) == 0) {
+		auto one_percent = total / 100;
+		if (one_percent <= 0) one_percent = 1;
+        if (progress % one_percent == 0) {
             cout << "\r" << progress * 100 / total << "%";
         }
-		if (progress == total - 1) {
-			cout << "\r";
-		}
     };
+	guesser.build_start_callback = start_callback;
+	guesser.build_end_callback = end_callback;
 	guesser.build_progress_callback = progress_callback;
-	guesser.init(words);
+    guesser.init(words);
 
 	auto candidates = guesser.current_list();
 	auto print_candidates = [&]() {
+		auto [word, possibilities, depth] = guesser.current();
 		if (guesser.finished()) {
-			String word = guesser.current().first;
 			word = fmt::format(fmt::bg(fmt::color::green) | fmt::fg(fmt::color::black), FMT_STRING("{}"), word);
 			cout << "you win! the word is " << word << ". type 'restart' to restart" << endl;
 		} else {
+			cout << "possibilities: " << possibilities << ", max depth: " << depth - 1 << endl;
 			Printer(0, cout).print_with_color(candidates);
 		}
 	};
@@ -182,6 +211,7 @@ int main(int argc, char** argv) {
 			cout << "type 'reload' to reload words from file" << endl;
 			cout << "type 'restart' to restart" << endl;
 			cout << "type 'choices' to print all candidate choices" << endl;
+			cout << "type 'choicesv' to print all candidate choices with verbose information" << endl;
 			cout << "type 'routes' to print all possible routes" << endl;
 			continue;
 		}
@@ -193,6 +223,10 @@ int main(int argc, char** argv) {
 		if (command == "choices") {
             print_candidates();
             continue;
+		}
+		if (command == "choicesv") {
+			Printer(0, cout).print_with_color_verbose(candidates);
+			continue;
 		}
 		if (command == "routes") {
 			auto printer = Printer(0, cout);
@@ -210,7 +244,7 @@ int main(int argc, char** argv) {
 		try {
 			int num = std::stoi(command);
 			if (num > 0 && num <= candidates.size()) {
-				auto [word, result] = candidates[num - 1];
+				auto& [word, result, _, __] = candidates[num - 1];
 				guesser.guess(word, result);
                 candidates = guesser.current_list();
                 print_candidates();

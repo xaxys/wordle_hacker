@@ -3,11 +3,14 @@
 
 #endif //WORDLE_HACKER_GUESSER_H
 
-#include <optional>
-#include <map>
-#include <functional>
 #include <cassert>
+#include <cctype>
 #include <compare>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
 
 using String = std::string;
 
@@ -37,6 +40,7 @@ public:
 
 struct Node {
     size_t count;
+    size_t depth;
     std::vector<String> words;
     std::optional<String> splitter;
     std::map<CompareResult, std::unique_ptr<Node>> children;
@@ -50,6 +54,8 @@ private:
     Node *cur = nullptr;
 
 public:
+    std::function<void()> build_start_callback;
+    std::function<void(const Node &)> build_end_callback;
     std::function<void(const Node &, size_t, size_t)> build_progress_callback;
     bool finished() const;
     void init(const std::vector<String>& words);
@@ -58,6 +64,6 @@ public:
     void visit(std::function<void(const Node&)> visitor);
     void filter(const String& word, const CompareResult& result);
     void guess(const String& word, const CompareResult& result);
-    std::pair<String, int> current() const;
-    std::vector<std::pair<String, CompareResult>> current_list() const;
+    std::tuple<String, size_t, size_t> current() const;
+    std::vector<std::tuple<String, CompareResult, size_t, size_t>> current_list() const;
 };

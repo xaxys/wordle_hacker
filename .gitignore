@@ -4,4 +4,6 @@
 cmake-*
 build
 bin
+out
 *.exe
+CMakeSettings.json
